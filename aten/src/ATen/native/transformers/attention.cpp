@@ -726,6 +726,13 @@ Tensor scaled_dot_product_attention(
     bool enable_gqa) {
   using sdp::SDPBackend;
   validate_sdpa_input(query_, key, value, attn_mask_, dropout_p, is_causal, scale);
+
+  // Promote 3D (unbatched) to 4D so fused kernels are eligible
+  // (same pattern as Convolution.cpp::batchify).
+  const bool is_batched = query_.dim() == 4;
+
+  auto impl = [&](const Tensor& query_, const Tensor& key, const Tensor& value,
+                  std::optional<Tensor> attn_mask_) -> Tensor {
   // NB: This op is CompositeImplicitAutograd — autograd traces through the
   // implementation rather than using an explicit backward formula. We must
   // return early here because the scale computation (1/sqrt(head_dim)) is
@@ -861,6 +868,16 @@ Tensor scaled_dot_product_attention(
           "No viable backend for scaled_dot_product_attention was found.");
       return Tensor();
   }
+  }; // end impl
+
+  if (!is_batched) {
+    auto mask = attn_mask_.has_value()
+        ? std::make_optional(attn_mask_->unsqueeze(0)) : attn_mask_;
+    return impl(
+        query_.unsqueeze(0), key.unsqueeze(0), value.unsqueeze(0), mask)
+        .squeeze(0);
+  }
+  return impl(query_, key, value, attn_mask_);
 }
 
 std::tuple<Tensor, Tensor> _scaled_dot_product_attention_math(

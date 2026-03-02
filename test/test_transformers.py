@@ -1565,17 +1565,22 @@ class TestSDPAFailureModes(NNTestCase):
         "kernel",
         PLATFORM_SPECIFIC_SDPA,
     )
-    def test_invalid_fused_inputs_dim_3(self, device, kernel: SDPBackend):
+    def test_fused_inputs_dim_3(self, device, kernel: SDPBackend):
+        # 3D (unbatched) inputs are promoted to 4D internally so fused
+        # kernels can handle them (same batchify pattern as conv2d).
         with sdpa_kernel(backends=[kernel]):
-            # Dim is not 4
             size = (2, 3, 8)
             dtype = torch.float16
             q = torch.randn(size, device=device, dtype=dtype)
             k = torch.randn(size, device=device, dtype=dtype)
             v = torch.randn(size, device=device, dtype=dtype)
-            with self.assertWarnsRegex(UserWarning, "All fused kernels requires query, key and value to be 4 dimensional"):
-                self.assertRaises(RuntimeError, lambda: torch.nn.functional.scaled_dot_product_attention(
-                    q, k, v, None, 0.0, False))
+            result = torch.nn.functional.scaled_dot_product_attention(
+                q, k, v, None, 0.0, False)
+            self.assertEqual(result.shape, size)
+            with sdpa_kernel(backends=[SDPBackend.MATH]):
+                expected = torch.nn.functional.scaled_dot_product_attention(
+                    q, k, v, None, 0.0, False)
+            self.assertEqual(result, expected, atol=1e-3, rtol=1e-3)
 
     @onlyCUDA
     @unittest.skipIf(not PLATFORM_SUPPORTS_FUSED_ATTENTION, "Does not support fused scaled dot product attention")

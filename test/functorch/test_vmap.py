@@ -4153,6 +4153,58 @@ class TestVmapBatchedGradient(Namespace.TestVmapBase):
             self.assertEqual(grads[1].shape, key.shape)
             self.assertEqual(grads[2].shape, value.shape)
 
+    @parametrize(
+        "backend",
+        [b for b in PLATFORM_SPECIFIC_SDPA if b != SDPBackend.MATH],
+    )
+    def test_sdpa_unbatched_under_vmap(self, device, backend):
+        """Test that unbatched (3D) SDPA input uses fused kernels under vmap."""
+        if device == "cpu":
+            raise unittest.SkipTest("This test is only for CUDA for now")
+
+        backend_ctx = sdpa_kernel([backend])
+        with backend_ctx:
+            B = 4
+            heads, seq_len, head_dim = 8, 32, 64
+            query = torch.randn(
+                B,
+                heads,
+                seq_len,
+                head_dim,
+                dtype=torch.float16,
+                device=device,
+                requires_grad=True,
+            )
+            key = torch.randn(
+                B,
+                heads,
+                seq_len,
+                head_dim,
+                dtype=torch.float16,
+                device=device,
+                requires_grad=True,
+            )
+            value = torch.randn(
+                B,
+                heads,
+                seq_len,
+                head_dim,
+                dtype=torch.float16,
+                device=device,
+                requires_grad=True,
+            )
+
+            result = vmap(F.scaled_dot_product_attention)(query, key, value)
+            self.assertEqual(result.shape, (B, heads, seq_len, head_dim))
+
+            def f(q, k, v):
+                return F.scaled_dot_product_attention(q, k, v).sum()
+
+            grads = vmap(grad(f, argnums=(0, 1, 2)))(query, key, value)
+            self.assertEqual(grads[0].shape, query.shape)
+            self.assertEqual(grads[1].shape, key.shape)
+            self.assertEqual(grads[2].shape, value.shape)
+
     @allowVmapFallbackUsage
     def test_inplace_view(self, device):
         leaf = torch.randn(4, 5, requires_grad=True)
